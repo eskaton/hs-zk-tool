@@ -1,0 +1,18 @@
+name:                zk-tool
+version:             0.1.0.0
+synopsis:            ZooKeeper command line utility
+description:         A simple utility to view and modify ZooKeeper data
+license:             BSD3
+license-file:        LICENSE
+author:              Adrian Moser
+category:            Database
+build-type:          Simple
+cabal-version:       >= 1.10
+
+executable zk-tool
+  main-is:             ZkTool.hs
+  build-depends:       base >= 4.11 && < 4.12
+                     , bytestring >= 0.10.8.2
+                     , hzk >= 2.1.0
+  hs-source-dirs:      src
+  default-language:    Haskell2010
