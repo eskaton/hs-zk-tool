@@ -1,5 +1,6 @@
 --{-# LANGUAGE OverloadedStrings #-}
 import Control.Monad
+import Data.Char
 import Data.Maybe
 import Data.List
 import qualified Database.Zookeeper as Z
@@ -13,11 +14,16 @@ import Text.Read
 data Operation = Dump | Get | Set | Create | Delete | Stat | Children | GetAcl
    deriving (Show, Read, Eq)
 
+data Scheme = Digest | IP | Host
+   deriving (Show, Read, Eq)
+
 data Options = Options { 
      optZookeeper :: String,
      optOperation :: Operation,
      optPath :: Maybe String,
-     optValue :: Maybe String
+     optValue :: Maybe String,
+     optScheme :: Maybe Scheme,
+     optCredentials :: Maybe String
    } deriving Show
 
 ops = [(Dump,     opDump), 
@@ -35,7 +41,9 @@ defaultOptions = Options {
       optZookeeper = "",
       optOperation = Dump,
       optPath = Nothing,
-      optValue = Nothing
+      optValue = Nothing,
+      optScheme = Nothing,
+      optCredentials = Nothing
    }
 
 options :: [OptDescr (Options -> IO Options)]
@@ -57,6 +65,17 @@ options =
    , Option ['p'] ["path"]
       (ReqArg (\arg opt -> return opt { optPath = Just arg }) "PATH")
       "Path"
+   , Option ['s'] ["scheme"]
+      (ReqArg (\arg opt -> do
+          let eitherScheme = readEither arg :: Either String Scheme
+          case eitherScheme of
+             Left _       -> hPutStrLn stderr ("Unknown scheme: " ++ arg) >> exitWith (ExitFailure 1)
+             Right scheme -> return opt { optScheme = Just scheme }
+         ) "SCHEME")
+      "Authentication scheme: Digest"
+   , Option ['c'] ["credentials"]
+      (ReqArg (\arg opt -> return opt { optCredentials = Just arg }) "CREDENTIALS")
+      "Credentials depending on scheme"
    , Option ['v'] ["value"]
       (ReqArg (\arg opt -> return opt { optValue = Just arg }) "VALUE")
       "Value"
@@ -80,8 +99,21 @@ main = do
    Z.setDebugLevel Z.ZLogError
 
    Z.withZookeeper (optZookeeper opts) 1000 Nothing Nothing $ \zh -> do 
+      maybe (return ()) (\_ -> addAuth zh opts) (optScheme opts)
       let op = snd $ fromJust $ find ((==) (optOperation opts) . fst) ops in
          op zh opts
+
+addAuth :: Z.Zookeeper -> Options -> IO ()
+addAuth zh opts = credentials opts >>= addAuthScheme zh (scheme opts)
+   where
+      scheme = map toLower . show . fromJust . optScheme
+      credentials opts = maybe (ioError $ userError "Credentials are mandatory if scheme is set") return (optCredentials opts)
+
+addAuthScheme :: Z.Zookeeper -> String -> String -> IO ()
+addAuthScheme zh scheme credentials = Z.addAuth zh scheme (B.pack credentials) $ \result -> do
+   case result of
+      Left e  -> hPutStrLn stderr ("Authentication error: " ++ (show e)) >> exitWith (ExitFailure 1)
+      Right _ -> return ()
 
 withPath :: Options -> (String -> IO ()) -> IO ()
 withPath opts fun = maybe error fun $ optPath opts

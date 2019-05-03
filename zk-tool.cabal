@@ -11,7 +11,7 @@ cabal-version:       >= 1.10
 
 executable zk-tool
   main-is:             ZkTool.hs
-  build-depends:       base >= 4.11 && < 4.12
+  build-depends:       base >= 4.9 && < 4.12
                      , bytestring >= 0.10.8.2
                      , hzk >= 2.1.0
   hs-source-dirs:      src
