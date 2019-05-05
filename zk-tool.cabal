@@ -11,8 +11,11 @@ cabal-version:       >= 1.10
 
 executable zk-tool
   main-is:             ZkTool.hs
-  build-depends:       base >= 4.9 && < 4.12
+  build-depends:       aeson >= 1.3.1.0
+                     , base >= 4.9
                      , bytestring >= 0.10.8.2
                      , hzk >= 2.1.0
+                     , text >= 1.2.3.1
+                     , split >= 0.2.3.3
   hs-source-dirs:      src
   default-language:    Haskell2010

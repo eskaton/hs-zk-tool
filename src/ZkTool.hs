@@ -1,8 +1,14 @@
---{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings #-}
 import Control.Monad
+import Data.Aeson hiding (Options, defaultOptions)
+import Data.Aeson.Text hiding (Options, defaultOptions)
+import Data.Aeson.Types hiding (Options, defaultOptions)
 import Data.Char
 import Data.Maybe
 import Data.List
+import Data.List.Split
+import qualified Data.Text.Lazy.IO as T
+import qualified Data.Text.Lazy.Encoding as T
 import qualified Database.Zookeeper as Z
 import qualified Data.ByteString.Char8 as B
 import System.Console.GetOpt
@@ -11,6 +17,8 @@ import System.Exit
 import System.IO
 import Text.Read
 
+import Control.Monad.IO.Class
+
 data Operation = Dump | Get | Set | Create | Delete | Stat | Children | GetAcl
    deriving (Show, Read, Eq)
 
@@ -18,13 +26,29 @@ data Scheme = Digest | IP | Host
    deriving (Show, Read, Eq)
 
 data Options = Options { 
-     optZookeeper :: String,
-     optOperation :: Operation,
-     optPath :: Maybe String,
-     optValue :: Maybe String,
-     optScheme :: Maybe Scheme,
-     optCredentials :: Maybe String
-   } deriving Show
+   optZookeeper :: String,
+   optOperation :: Operation,
+   optPath :: Maybe String,
+   optValue :: Maybe String,
+   optScheme :: Maybe Scheme,
+   optCredentials :: Maybe String,
+   optJson :: Bool
+} deriving Show
+
+data Node = Node {
+   nodePath :: String,
+   nodeName :: String,
+   nodeValue :: Maybe String,
+   nodeChildren :: Maybe [Node]
+} deriving (Show)
+
+instance ToJSON Node where
+   toJSON (Node path name value nodes) = do
+      object $ ["path" .= path, "name" .= name] ++ addValue "value" value ++ addValue "nodes" nodes 
+
+addValue name value = case value of
+      Nothing -> []
+      Just v  -> [name .= v]
 
 ops = [(Dump,     opDump), 
        (Get,      opGet),
@@ -43,7 +67,8 @@ defaultOptions = Options {
       optPath = Nothing,
       optValue = Nothing,
       optScheme = Nothing,
-      optCredentials = Nothing
+      optCredentials = Nothing,
+      optJson = False
    }
 
 options :: [OptDescr (Options -> IO Options)]
@@ -79,6 +104,9 @@ options =
    , Option ['v'] ["value"]
       (ReqArg (\arg opt -> return opt { optValue = Just arg }) "VALUE")
       "Value"
+   , Option ['j'] ["json"]
+      (NoArg (\opt -> return opt { optJson = True }))
+      "Enable JSON output"
    ]
 
 exitUsage = do
@@ -169,25 +197,63 @@ opChildren zh opts = withPath opts $ \path -> Z.getChildren zh path Nothing >>= 
 
 opDump :: Z.Zookeeper -> Options -> IO ()
 opDump zh opts = do
-      printNodes zh 0 $ maybe "/" id $ optPath opts
+      result <- buildTree zh $ maybe "/" id $ optPath opts 
+      case optJson opts of
+         True -> printJson result
+         False -> printPlain result
    where
-      printNodes zh level node = do
+      buildTree zh node = do
          maybeValue <- Z.get zh node Nothing
-         let value = either (\_ -> Nothing) fst maybeValue in
-            printNode level node $ fromMaybe "" (liftM B.unpack value)
-
          maybeNodes <- Z.getChildren zh node Nothing
+         children <- getNodes zh node maybeNodes
 
-         let nodes = either (\_ -> []) id maybeNodes in
-            forM_ nodes (\n -> printNodes zh (level+1) $ joinNodes node n)
+         return Node {
+            nodePath = getPath node,
+            nodeName = last $ splitOn "/" node,
+            nodeValue = getValue maybeValue,
+            nodeChildren = toMaybe children
+         }
+
+      getValue maybeValue = let value = either (\_ -> Nothing) fst maybeValue in
+            liftM B.unpack value
+
+      getPath node = formatPath $ intercalate "/" $ init $ splitOn "/" node
+
+      formatPath "" = "/"
+      formatPath path = path
+
+      getNodes :: Z.Zookeeper -> String -> Either Z.ZKError [String] -> IO [Node]
+      getNodes zh node maybeNodes = getNodesAux zh node maybeNodes
+
+      getNodesAux :: Z.Zookeeper -> String -> Either Z.ZKError [String] -> IO [Node]
+      getNodesAux zh node maybeNodes = mapM (\n -> buildTree zh $ joinNodes node n) $ either (\_ -> []) id maybeNodes
 
       joinNodes n1 n2 = case (n1, n2) of
                            ("/", n2) -> "/" ++ n2
                            (n1,  n2) -> n1 ++ "/" ++ n2
 
-printNode :: Int -> String -> String -> IO ()
-printNode level node "" = putStrLn $ line level node
-printNode level node value = putStrLn $ line level node ++ "\n  " ++ line level value
+printJson :: Node -> IO ()
+printJson node = T.putStrLn $ T.decodeUtf8 $ encode $ nodeChildren node
 
-line :: Int -> String -> String
-line n val = (concat $ take (n*2) $ repeat " ") ++ val
+printPlain :: Node -> IO ()
+printPlain node = printPlainAux node 0
+   where
+      printPlainAux node level = do
+         putStrLn $ formatNode node level
+         mapM_ (\node -> printPlainAux node (level+1)) (maybe [] id $ nodeChildren node)
+
+      formatNode node level = indent level $ (formatPath (nodePath node) (nodeName node)) ++ (formatValue $ nodeValue node)
+
+      formatPath "/" name  = "/" ++ name
+      formatPath path name = path ++ "/" ++ name
+
+      formatValue Nothing = ""
+      formatValue (Just "") = ""
+      formatValue (Just value) = "\n\t" ++ value
+
+toMaybe :: [a] -> Maybe [a]
+toMaybe [] = Nothing
+toMaybe list = Just list
+
+indent :: Int -> String -> String
+indent n val = (concat $ take (n*2) $ repeat " ") ++ val
