@@ -44,10 +44,15 @@ data Node = Node {
 
 instance ToJSON Node where
    toJSON (Node path name value nodes) = do
-      object $ ["path" .= path, "name" .= name] ++ addValue "value" value ++ addValue "nodes" nodes 
+      object $ ["path" .= path] ++ addValue "name" name ++ addMaybeValue "value" value ++ addMaybeValue "nodes" nodes 
 
 addValue name value = case value of
+      "" -> []
+      v  -> [name .= v]
+
+addMaybeValue name value = case value of
       Nothing -> []
+      Just [] -> []
       Just v  -> [name .= v]
 
 ops = [(Dump,     opDump), 
@@ -233,7 +238,7 @@ opDump zh opts = do
                            (n1,  n2) -> n1 ++ "/" ++ n2
 
 printJson :: Node -> IO ()
-printJson node = T.putStrLn $ T.decodeUtf8 $ encode $ nodeChildren node
+printJson node = T.putStrLn $ T.decodeUtf8 $ encode $ node
 
 printPlain :: Node -> IO ()
 printPlain node = printPlainAux node 0
